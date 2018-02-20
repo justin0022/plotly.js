@@ -149,7 +149,9 @@ Plotly.plot = function(gd, data, layout, config) {
         gd._replotPending = false;
     }
 
+    console.time('defaults')
     Plots.supplyDefaults(gd);
+    console.timeEnd('defaults')
 
     var fullLayout = gd._fullLayout;
 
@@ -180,10 +182,12 @@ Plotly.plot = function(gd, data, layout, config) {
 
     // prepare the data and find the autorange
 
+    console.time('calc')
     // generate calcdata, if we need to
     // to force redoing calcdata, just delete it before calling Plotly.plot
     var recalc = !gd.calcdata || gd.calcdata.length !== (gd._fullData || []).length;
     if(recalc) Plots.doCalcdata(gd);
+    console.timeEnd('calc')
 
     // in case it has changed, attach fullData traces to calcdata
     for(var i = 0; i < gd.calcdata.length; i++) {
@@ -349,6 +353,7 @@ Plotly.plot = function(gd, data, layout, config) {
 
     // Now plot the data
     function drawData() {
+        console.time('draw')
         var calcdata = gd.calcdata,
             i,
             rangesliderContainers = fullLayout._infolayer.selectAll('g.rangeslider-container');
@@ -381,18 +386,22 @@ Plotly.plot = function(gd, data, layout, config) {
             }
         }
 
+        console.time('base plot')
         // loop over the base plot modules present on graph
         var basePlotModules = fullLayout._basePlotModules;
         for(i = 0; i < basePlotModules.length; i++) {
             basePlotModules[i].plot(gd);
         }
+        console.timeEnd('base plot')
 
         // keep reference to shape layers in subplots
         var layerSubplot = fullLayout._paper.selectAll('.layer-subplot');
         fullLayout._shapeSubplotLayers = layerSubplot.selectAll('.shapelayer');
 
         // styling separate from drawing
+        console.time('style')
         Plots.style(gd);
+        console.timeEnd('style')
 
         // show annotations and shapes
         Registry.getComponentMethod('shapes', 'draw')(gd);
@@ -404,6 +413,7 @@ Plotly.plot = function(gd, data, layout, config) {
         // Mark the first render as complete
         fullLayout._replotting = false;
 
+        console.timeEnd('draw')
         return Plots.previousPromises(gd);
     }
 
@@ -890,10 +900,10 @@ function getExtendProperties(gd, update, indices, maxPoints) {
             target = prop.get();
             insert = update[key][j];
 
-            if(!Array.isArray(insert)) {
+            if(!Lib.isArray(insert)) {
                 throw new Error('attribute: ' + key + ' index: ' + j + ' must be an array');
             }
-            if(!Array.isArray(target)) {
+            if(!Lib.isArray(target)) {
                 throw new Error('cannot extend missing or non-array attribute: ' + key);
             }
 
@@ -1009,6 +1019,7 @@ function spliceTraces(gd, update, indices, maxPoints, lengthenArray, spliceArray
 Plotly.extendTraces = function extendTraces(gd, update, indices, maxPoints) {
     gd = Lib.getGraphDiv(gd);
 
+    console.time('splice traces')
     var undo = spliceTraces(gd, update, indices, maxPoints,
 
                            /*
@@ -1024,6 +1035,7 @@ Plotly.extendTraces = function extendTraces(gd, update, indices, maxPoints) {
                             function(target, maxPoints) {
                                 return target.splice(0, target.length - maxPoints);
                             });
+    console.timeEnd('splice traces')
 
     var promise = Plotly.redraw(gd);
 
@@ -2008,12 +2020,12 @@ function _relayout(gd, aobj) {
             else flags.plot = true;
         }
         else {
-            if((fullLayout._has('gl2d') || fullLayout._has('regl')) &&
+            if(fullLayout._has('regl') &&
                 (ai === 'dragmode' &&
                 (vi === 'lasso' || vi === 'select') &&
                 !(vOld === 'lasso' || vOld === 'select'))
             ) {
-                flags.calc = true;
+                flags.plot = true;
             }
             else if(valObject) editTypes.update(flags, valObject);
             else flags.calc = true;

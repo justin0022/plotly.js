@@ -41,73 +41,82 @@ var SYMBOL_SVG_CIRCLE = Drawing.symbolFuncs[0](SYMBOL_SIZE * 0.05);
 var TOO_MANY_POINTS = 1e5;
 var DOT_RE = /-dot/;
 
+function isTypedArray(a) {
+    return !Array.isArray(a) && Lib.isArray(a);
+}
+
+function makeCalcdata(trace, ax, letter) {
+    var arr = trace[letter];
+    var count = trace._length;
+    var i;
+
+    if(isTypedArray(arr)) {
+        return arr;
+    } else if(arr) {
+        if(ax.type === 'linear') {
+            for(i = 0; i < count; i++) {
+                arr[i] = isNumeric(arr[i]) ? +arr[i] : NaN;
+            }
+        } else if(ax.type === 'log') {
+            for(i = 0; i < count; i++) {
+                arr[i] = isNumeric(arr[i]) ? ax.d2l(arr[i]) : NaN;
+            }
+        } else {
+            arr = ax.makeCalcdata(trace, letter);
+        }
+    } else {
+        arr = new Array(count);
+        for(i = 0; i < count; i++) {
+            arr[i] = i;
+        }
+    }
+   
+    return arr;
+}
+
 function calc(container, trace) {
     var layout = container._fullLayout;
-    var positions;
     var stash = {};
     var xaxis = Axes.getFromId(container, trace.xaxis);
     var yaxis = Axes.getFromId(container, trace.yaxis);
-
     var subplot = layout._plots[trace.xaxis + trace.yaxis];
+    var count = trace._length;
+    var i;
 
-    var x = xaxis.type === 'linear' ? trace.x : xaxis.makeCalcdata(trace, 'x');
-    var y = yaxis.type === 'linear' ? trace.y : yaxis.makeCalcdata(trace, 'y');
-
-    var count = trace._length, i, xx, yy;
-
-    if(!x) {
-        x = Array(count);
-        for(i = 0; i < count; i++) {
-            x[i] = i;
-        }
-    }
-    if(!y) {
-        y = Array(count);
-        for(i = 0; i < count; i++) {
-            y[i] = i;
-        }
-    }
+    console.time('calc:makeCalcdata')
+    var x = makeCalcdata(trace, xaxis, 'x');
+    var y = makeCalcdata(trace, yaxis, 'y');
+    console.timeEnd('calc:makeCalcdata')
 
     // get log converted positions
     var rawx = (xaxis.type === 'log' || x.length > count) ? x.slice(0, count) : x;
     var rawy = (yaxis.type === 'log' || y.length > count) ? y.slice(0, count) : y;
 
-    var convertX = (xaxis.type === 'log') ? xaxis.d2l : parseFloat;
-    var convertY = (yaxis.type === 'log') ? yaxis.d2l : parseFloat;
-
     // we need hi-precision for scatter2d
-    positions = new Array(count * 2);
+    var positions = new Array(count * 2);
 
     for(i = 0; i < count; i++) {
-        x[i] = convertX(x[i]);
-        y[i] = convertY(y[i]);
-
-        // if no x defined, we are creating simple int sequence (API)
-        // we use parseFloat because it gives NaN (we need that for empty values to avoid drawing lines) and it is incredibly fast
-        xx = isNumeric(x[i]) ? +x[i] : NaN;
-        yy = isNumeric(y[i]) ? +y[i] : NaN;
-
-        positions[i * 2] = xx;
-        positions[i * 2 + 1] = yy;
+        positions[i * 2] = x[i];
+        positions[i * 2 + 1] = y[i];
     }
 
+    console.time('calc:kdtree')
     // we don't build a tree for log axes since it takes long to convert log2px
     // and it is also
     if(xaxis.type !== 'log' && yaxis.type !== 'log') {
         // FIXME: delegate this to webworker
         stash.tree = kdtree(positions, 512);
-    }
-    else {
+    } else {
         var ids = stash.ids = Array(count);
         for(i = 0; i < count; i++) {
             ids[i] = i;
         }
     }
-
-    calcColorscales(trace);
+    console.timeEnd('calc:kdtree')
 
     var options = sceneOptions(container, subplot, trace, positions);
 
+    console.time('calc:Axes.expand')
     // expanding axes is separate from options
     if(!options.markers) {
         Axes.expand(xaxis, rawx, { padded: true });
@@ -119,12 +128,14 @@ function calc(container, trace) {
         Axes.expand(yaxis, rawy, { padded: true, ppad: sizes });
     }
     else {
-        var xbounds = [Infinity, -Infinity], ybounds = [Infinity, -Infinity];
+        var xbounds = [Infinity, -Infinity];
+        var ybounds = [Infinity, -Infinity];
         var size = options.markers.size;
 
         // axes bounds
         for(i = 0; i < count; i++) {
-            xx = x[i], yy = y[i];
+            var x = x[i];
+            var y = y[i];
             if(xbounds[0] > xx) xbounds[0] = xx;
             if(xbounds[1] < xx) xbounds[1] = xx;
             if(ybounds[0] > yy) ybounds[0] = yy;
@@ -153,6 +164,7 @@ function calc(container, trace) {
             }
         }
     }
+    console.timeEnd('calc:Axes.expand')
 
     // create scene
     var scene = sceneUpdate(container, subplot);
@@ -182,6 +194,8 @@ function calc(container, trace) {
     stash.rawy = rawy;
     stash.positions = positions;
     stash.count = count;
+
+    calcColorscales(trace);
 
     return [{x: false, y: false, t: stash, trace: trace}];
 }
@@ -754,6 +768,7 @@ function plot(container, subplot, cdata) {
     linkTraces(container, subplot, cdata);
 
     if(scene.dirty) {
+        console.time('plot:update')
         // make sure scenes are created
         if(scene.error2d === true) {
             scene.error2d = createError(regl);
@@ -867,6 +882,7 @@ function plot(container, subplot, cdata) {
 
             scene.fill2d.update(scene.fillOptions);
         }
+        console.timeEnd('plot:update')
     }
 
     var selectMode = dragmode === 'lasso' || dragmode === 'select';
@@ -921,6 +937,7 @@ function plot(container, subplot, cdata) {
                 scene.unselectBatch[id] = unselPts;
             }
 
+            console.time('precalculate')
             // precalculate px coords since we are not going to pan during select
             var xpx = Array(stash.count), ypx = Array(stash.count);
             for(i = 0; i < stash.count; i++) {
@@ -929,6 +946,7 @@ function plot(container, subplot, cdata) {
             }
             stash.xpx = xpx;
             stash.ypx = ypx;
+            console.timeEnd('precalculate')
         }
         else {
             stash.xpx = stash.ypx = null;
@@ -940,6 +958,7 @@ function plot(container, subplot, cdata) {
         } : null;
     });
 
+    console.time('plot:selectMode')
     if(selectMode) {
         // create select2d
         if(!scene.select2d) {
@@ -954,6 +973,7 @@ function plot(container, subplot, cdata) {
         scene.select2d.update(scene.markerOptions);
         scene.select2d.update(scene.selectedOptions);
     }
+    console.timeEnd('plot:selectMode')
 
     // uploat viewport/range data to GPU
     if(scene.fill2d) {
